@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	urls = []string{"google.com"}
+	urls = []string{"google.com", "facebook.com"}
 	matchedUrls []string
 	ipAddrs []*net.IPAddr
 	requests []map[int]time.Time
@@ -43,47 +43,28 @@ func ping(conn *icmp.PacketConn, ipAddr *net.IPAddr, id int, seq int, requests c
 	m := icmp.Message{
 		Type: ipv4.ICMPTypeEcho, Code: 0,
 		Body: &icmp.Echo{
-			ID: id,
-			Seq: seq,
+			ID:   id,
+			Seq:  seq,
 			Data: []byte(ipAddr.String()),
 		},
 	}
 
 	b, err := m.Marshal(nil)
 	if err != nil {
-		errors <- Error{ id, seq, ipAddr, err }
+		errors <- Error{id, seq, ipAddr, err}
 		return
 	}
 
 	// Send it
-	requests <- Request{ id, seq  }
+	requests <- Request{id, seq}
 	n, err := conn.WriteTo(b, ipAddr)
 	if err != nil {
-		errors <- Error{ id, seq, ipAddr, err }
+		errors <- Error{id, seq, ipAddr, err}
 		return
 	} else if n != len(b) {
 		err := fmt.Errorf("got %v; want %v", n, len(b))
-		errors <- Error{ id, seq, ipAddr, err }
+		errors <- Error{id, seq, ipAddr, err}
 		return
-	}
-}
-
-func sendResult(n int, peer net.Addr, reply []byte, results chan Result) {
-	rm, err := icmp.ParseMessage(1, reply[:n])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-	switch rm.Type {
-	case ipv4.ICMPTypeEchoReply:
-		switch pkt := rm.Body.(type) {
-		case *icmp.Echo:
-			endTime := time.Now()
-			results <- Result{pkt.ID, pkt.Seq, endTime}
-		default:
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "got %+v from %v; want echo reply\n", rm, peer)
 	}
 }
 
@@ -93,7 +74,7 @@ func listen(conn chan *icmp.PacketConn, results chan Result) {
 		log.Fatal(err)
 	}
 	conn <- c
-	defer c.Close()
+	// defer c.Close()
 
 	for {
 		reply := make([]byte, 1500)
@@ -103,7 +84,22 @@ func listen(conn chan *icmp.PacketConn, results chan Result) {
 			return
 		}
 
-		sendResult(n, peer, reply, results)
+		rm, err := icmp.ParseMessage(1, reply[:n])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		switch rm.Type {
+		case ipv4.ICMPTypeEchoReply:
+			switch pkt := rm.Body.(type) {
+			case *icmp.Echo:
+				endTime := time.Now()
+				results <- Result{pkt.ID, pkt.Seq, endTime}
+			default:
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "got %+v from %v; want echo reply\n", rm, peer)
+		}
 	}
 }
 
@@ -117,13 +113,13 @@ func pinger(conn *icmp.PacketConn, requests chan Request, errors chan Error) {
 		seq := int(i / l)
 		go ping(conn, ipAddrs[id], id, seq, requests, errors)
 		i++
+		// Sleep for 1 millisecond so that the listener's buffer isn't overloaded.
+		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 // https://gist.github.com/lmas/c13d1c9de3b2224f9c26435eb56e6ef3
 func main() {
-	fmt.Println("Hello!")
-
 	ipAddrs = make([]*net.IPAddr, 0, len(urls))
 	matchedUrls = make([]string, 0, len(urls))
 
@@ -154,17 +150,19 @@ func main() {
 		}
 	}
 
-	requests = make([]map[int]time.Time, len(ipAddrs))
-	for i, l := 0, len(ipAddrs); i < l; i++ {
+	ipCount := len(ipAddrs)
+
+	requests = make([]map[int]time.Time, ipCount)
+	for i, l := 0, ipCount; i < l; i++ {
 		requests[i] = map[int]time.Time{}
 	}
 
-	results = make([][]time.Duration, len(ipAddrs))
-	for i, l := 0, len(ipAddrs); i < l; i++ {
+	results = make([][]time.Duration, ipCount)
+	for i, l := 0, ipCount; i < l; i++ {
 		results[i] = []time.Duration{}
 	}
 
-	if len(ipAddrs) == 0 {
+	if ipCount == 0 {
 		log.Fatalf("Unable to find ips for any of the provided urls.\n")
 	}
 
@@ -178,8 +176,13 @@ func main() {
 		case req := <-requestReceiver:
 			requests[req.id][req.seq] = time.Now()
 		case res := <-resultReceiver:
+			if res.id >= ipCount {
+				continue
+			}
+
 			start, ok := requests[res.id][res.seq]
 			if !ok {
+				continue
 				log.Fatal("Response received without a corresponding request.")
 			}
 			delete(requests[res.id], res.seq)
