@@ -8,125 +8,11 @@ import (
 	"time"
 
 	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
 )
 
 var (
 	urls = []string{"google.com", "facebook.com"}
 )
-
-type Request struct {
-	id  int
-	seq int
-}
-
-type Result struct {
-	id      int
-	seq     int
-	endTime time.Time
-}
-
-type Error struct {
-	id     int
-	seq    int
-	ipAddr *net.IPAddr
-	err    error
-}
-
-// ping sends a ping request through the provided connection to ipAddr, and
-// sends the new request to the requests channel. id and seq are used to clear
-// the request if it fails. Inspired by
-// https://gist.github.com/lmas/c13d1c9de3b2224f9c26435eb56e6ef3
-func ping(conn *icmp.PacketConn, ipAddr *net.IPAddr, id int, seq int,
-	requests chan Request, errors chan Error) {
-	// Create the icmp request.
-	m := icmp.Message{
-		Type: ipv4.ICMPTypeEcho, Code: 0,
-		Body: &icmp.Echo{
-			ID:   id,
-			Seq:  seq,
-			Data: []byte(ipAddr.String()),
-		},
-	}
-
-	// Marshall it into bytes.
-	b, err := m.Marshal(nil)
-	if err != nil {
-		errors <- Error{id, seq, ipAddr, err}
-		return
-	}
-
-	// Send it.
-	requests <- Request{id, seq}
-	n, err := conn.WriteTo(b, ipAddr)
-	if err != nil {
-		errors <- Error{id, seq, ipAddr, err}
-		return
-	} else if n != len(b) {
-		err := fmt.Errorf("got %v; want %v", n, len(b))
-		errors <- Error{id, seq, ipAddr, err}
-		return
-	}
-}
-
-// listen opens a new PacketConn, listening for ipv4 icmp requests. When
-// received, it parses the request and sends it to the results channel.
-func listen(conn chan *icmp.PacketConn, results chan Result) {
-	c, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c.Close()
-	conn <- c
-	reply := make([]byte, 1500)
-
-	// Listen for packets in an infinite loop.
-	for {
-		n, peer, err := c.ReadFrom(reply)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return
-		}
-		endTime := time.Now()
-
-		rm, err := icmp.ParseMessage(1, reply[:n])
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return
-		}
-		switch rm.Type {
-		case ipv4.ICMPTypeEchoReply:
-			switch pkt := rm.Body.(type) {
-			case *icmp.Echo:
-				// If it is a valid echo packet, send the result to the results channel.
-				results <- Result{pkt.ID, pkt.Seq, endTime}
-			default:
-			}
-		default:
-			fmt.Fprintf(os.Stderr, "got %+v from %v; want echo reply\n", rm, peer)
-		}
-	}
-}
-
-func pinger(conn *icmp.PacketConn, ipAddrs []*net.IPAddr, requests chan Request,
-	errors chan Error) {
-	i := int64(0)
-	l := int64(len(ipAddrs))
-
-	// Ping each address in a round-robin fashion.
-	for {
-		id := int(i % l)
-		seq := int(i / l)
-
-		// Send the ping request in a new goroutine.
-		go ping(conn, ipAddrs[id], id, seq, requests, errors)
-
-		// Sleep for 1 millisecond so that the listener's buffer isn't overloaded.
-		time.Sleep(time.Millisecond)
-
-		i += 1
-	}
-}
 
 func main() {
 	// Set the cap of ipAddrs and matchedUrls to the length of the provided urls,
@@ -142,7 +28,7 @@ func main() {
 	errorReceiver := make(chan Error)
 
 	// Start the listener in a goroutine, and store the PacketConn.
-	go listen(connReceiver, resultReceiver)
+	go listener(connReceiver, resultReceiver)
 	conn := <-connReceiver
 
 	// For each provided url, resolve its ip address and make sure it's pingable.
