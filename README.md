@@ -3,6 +3,8 @@ pping
 
 _Parallel ping written in Go_
 
+David Shen, Jack Wiseman, Joon Park
+
 Build
 -----
 
