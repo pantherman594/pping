@@ -138,6 +138,8 @@ func main() {
 		}
 	}()
 
+	startTime := time.Now()
+
 	// Listen for requests, results, and errors.
 	for {
 		select {
@@ -172,6 +174,18 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to ping IP %s: %v\n",
 				e.ipAddr.String(), e.err)
 		case <-quit:
+			dur := time.Since(startTime)
+			durSec := float64(dur.Nanoseconds()) / float64(time.Second)
+			totalPings := 0
+
+			for _, v := range results {
+				totalPings += len(v)
+			}
+
+			pingsPerSec := float64(totalPings) / durSec
+
+			fmt.Printf("Pinged %d times in %0.4f seconds (%0.2f pings/sec).\n", totalPings, durSec, pingsPerSec)
+
 			if writer != nil {
 				for _, v := range results {
 					err := writer.Write(v)
