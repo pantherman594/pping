@@ -1,20 +1,58 @@
 package main
 
 import (
+	"encoding/csv"
+	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"time"
 
 	"golang.org/x/net/icmp"
 )
 
-var (
-	urls = []string{"google.com", "facebook.com"}
-)
-
 func main() {
+	outFileName := flag.String("o", "",
+		"Write the results to output_file if provided, in CSV format")
+	maxProcs := flag.Int("p", 0,
+		"Sets the value of runtime.GOMAXPROCS to max_procs. If max_procs is set to -1, pping will print the default value for runtime.GOMAXPROCS and quit.")
+
+	flag.Parse()
+
+	urls := flag.Args()
+
+	if *maxProcs < 0 {
+		fmt.Printf("runtime.GOMAXPROCS = %d\n", runtime.GOMAXPROCS(-1))
+		os.Exit(0)
+	}
+
+	if *maxProcs >= 1 {
+		runtime.GOMAXPROCS(*maxProcs)
+	}
+
+	if len(urls) == 0 {
+		log.Fatalln("No urls provided.")
+	}
+
+	var outFile *os.File
+	var writer *csv.Writer = nil
+	var err error
+
+	if len(*outFileName) > 0 {
+		outFile, err = os.Create(*outFileName)
+		if err != nil {
+			log.Fatalf("Unable to create output file: %v.\n", err)
+		}
+		defer outFile.Close()
+
+		writer = csv.NewWriter(outFile)
+		defer writer.Flush()
+	}
+
 	// Set the cap of ipAddrs and matchedUrls to the length of the provided urls,
 	// so that memory won't need to be reallocated later and because there cannot
 	// be more than the provided urls.
@@ -26,9 +64,10 @@ func main() {
 	requestReceiver := make(chan Request)
 	resultReceiver := make(chan Result)
 	errorReceiver := make(chan Error)
+	quit := make(chan struct{})
 
 	// Start the listener in a goroutine, and store the PacketConn.
-	go listener(connReceiver, resultReceiver)
+	go Listener(connReceiver, resultReceiver, quit)
 	conn := <-connReceiver
 
 	// For each provided url, resolve its ip address and make sure it's pingable.
@@ -40,7 +79,7 @@ func main() {
 		}
 
 		// Attempt to ping the resolved ip address.
-		go ping(conn, ip, 0, 0, requestReceiver, errorReceiver)
+		go Ping(conn, ip, 0, 0, requestReceiver, errorReceiver)
 		<-requestReceiver
 
 		select {
@@ -68,16 +107,36 @@ func main() {
 		requests[i] = map[int]time.Time{}
 	}
 
-	results := make([][]time.Duration, ipCount)
+	results := make([][]string, ipCount)
 	for i, l := 0, ipCount; i < l; i++ {
-		results[i] = []time.Duration{}
+		results[i] = []string{matchedUrls[i], ipAddrs[i].String()}
 	}
 
 	fmt.Printf("Pinging %d URLs...\n", len(matchedUrls))
 
 	// Start the looped pinger in a separate routine so that we can handle stuff
 	// in the main routine.
-	go pinger(conn, ipAddrs, requestReceiver, errorReceiver)
+	go Pinger(conn, ipAddrs, requestReceiver, errorReceiver, quit)
+
+	// Read keyboard input for q.
+	// From https://github.com/pantherman594/tunnel/blob/master/main.go#L165.
+	go func() {
+		// Disable input buffering
+		exec.Command("stty", "-F", "/dev/tty", "cbreak", "min", "1").Run()
+		// Do not display entered characters on the screen
+		exec.Command("stty", "-F", "/dev/tty", "-echo").Run()
+		var b []byte = make([]byte, 1)
+
+		for {
+			os.Stdin.Read(b)
+			if b[0] == 'q' {
+				quit <- struct{}{}
+				quit <- struct{}{}
+				quit <- struct{}{}
+				return
+			}
+		}
+	}()
 
 	// Listen for requests, results, and errors.
 	for {
@@ -101,9 +160,10 @@ func main() {
 			// Calculate the total duration, log it, and store it in results.
 			dur := res.endTime.Sub(start)
 			durMs := float64(dur.Nanoseconds()) / float64(time.Millisecond)
+			durMsStr := strconv.FormatFloat(durMs, 'f', 4, 64)
 
-			fmt.Printf("Pinged %s in %0.2fms.\n", ipAddrs[res.id], durMs)
-			results[res.id] = append(results[res.id], dur)
+			fmt.Printf("Pinged %s in %sms.\n", ipAddrs[res.id], durMsStr)
+			results[res.id] = append(results[res.id], durMsStr)
 		case e := <-errorReceiver:
 			if e.id < ipCount {
 				delete(requests[e.id], e.seq)
@@ -111,6 +171,17 @@ func main() {
 
 			fmt.Fprintf(os.Stderr, "Failed to ping IP %s: %v\n",
 				e.ipAddr.String(), e.err)
+		case <-quit:
+			if writer != nil {
+				for _, v := range results {
+					err := writer.Write(v)
+					if err != nil {
+						fmt.Printf("Error writing to file: %v.\n", err)
+					}
+				}
+			}
+			return
+		default:
 		}
 	}
 }

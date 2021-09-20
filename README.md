@@ -22,7 +22,7 @@ Description
 **pping** uses the ICMP protocol to concurrently send requests to the
 destinations provided. These can be 1 or more urls or IPv4 addresses. It
 records the round trip times for each request and can output it to a specified
-output file.
+output file. Press 'q' at any time to quit.
 
 **ping** works only with IPv4 at this time.
 
@@ -40,7 +40,7 @@ Write the results to _output_file_ if provided, in CSV format.
 #### -p _max_procs_
 
 Sets the value of `runtime.GOMAXPROCS` to _max_procs_. If _max_procs_ is set to
--1 **pping** will print the default value for `runtime.GOMAXPROCS` and quit.
+-1, **pping** will print the default value for `runtime.GOMAXPROCS` and quit.
 
 #### _destinations..._
 
@@ -78,3 +78,6 @@ may have occurred during the `ping` routine. It stores each new request in a
 map for that address, with the start time. When a result is received, it looks
 up the starting time in that map, computes the duration, and stores it in a new
 jagged 2D array named `results`, and clears the map entry.
+
+The `main` routine also uses a goroutine to read for the 'q' key being pressed,
+which will send messages to the `quit` channel to stop the pinger and listener.
