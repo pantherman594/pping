@@ -13,7 +13,7 @@ import (
 // listener opens a new PacketConn, listening for ipv4 icmp requests. When
 // received, it parses the request and sends it to the results channel.
 func Listener(conn chan *icmp.PacketConn, results chan Result,
-	quit chan struct{}) {
+	errors chan Error, quit chan struct{}) {
 	c, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
 		log.Fatal(err)
@@ -45,7 +45,7 @@ func Listener(conn chan *icmp.PacketConn, results chan Result,
 			default:
 			}
 		default:
-			fmt.Fprintf(os.Stderr, "got %+v from %v; want echo reply\n", rm, peer)
+			errors <- Error{-1, -1, fmt.Errorf("Got %+v from %v; want echo reply\n", rm, peer)}
 		}
 
 		select {

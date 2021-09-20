@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net"
 	"time"
 )
 
@@ -17,8 +16,7 @@ type Result struct {
 }
 
 type Error struct {
-	id     int
-	seq    int
-	ipAddr *net.IPAddr
-	err    error
+	id  int
+	seq int
+	err error
 }

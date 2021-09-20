@@ -28,7 +28,7 @@ func Ping(conn *icmp.PacketConn, ipAddr *net.IPAddr, id int, seq int,
 	// Marshall it into bytes.
 	b, err := m.Marshal(nil)
 	if err != nil {
-		errors <- Error{id, seq, ipAddr, err}
+		errors <- Error{id, seq, err}
 		return
 	}
 
@@ -36,11 +36,11 @@ func Ping(conn *icmp.PacketConn, ipAddr *net.IPAddr, id int, seq int,
 	requests <- Request{id, seq}
 	n, err := conn.WriteTo(b, ipAddr)
 	if err != nil {
-		errors <- Error{id, seq, ipAddr, err}
+		errors <- Error{id, seq, err}
 		return
 	} else if n != len(b) {
 		err := fmt.Errorf("got %v; want %v", n, len(b))
-		errors <- Error{id, seq, ipAddr, err}
+		errors <- Error{id, seq, err}
 		return
 	}
 }
